@@ -20,6 +20,8 @@ public class Settings {
 
     private static Boolean pushToTalk = false;
 
+    private static Boolean invertPushToTalk = false;
+
     private static String comPort = "COM1";
 
     public static void init() {
@@ -35,6 +37,7 @@ public class Settings {
             port = Integer.parseInt(props.getProperty("port"));
             ip = props.getProperty("ip");
             pushToTalk = Boolean.parseBoolean(props.getProperty("pushToTalk"));
+            invertPushToTalk = Boolean.parseBoolean(props.getProperty("invertPushToTalk"));
             comPort = props.getProperty("comPort");
 
             isr.close();
@@ -55,6 +58,7 @@ public class Settings {
         props.setProperty("port", String.valueOf(port));
         props.setProperty("ip", ip);
         props.setProperty("pushToTalk", String.valueOf(pushToTalk));
+        props.setProperty("invertPushToTalk", String.valueOf(invertPushToTalk));
         props.setProperty("comPort", comPort);
 
         Writer fstream = null;
@@ -119,6 +123,14 @@ public class Settings {
 
     public static void setPushToTalk(Boolean pushToTalk) {
         Settings.pushToTalk = pushToTalk;
+    }
+
+    public static Boolean getInvertPushToTalk() {
+        return invertPushToTalk;
+    }
+
+    public static void setInvertPushToTalk(Boolean invertPushToTalk) {
+        Settings.invertPushToTalk = invertPushToTalk;
     }
 
     public static String getComPort() {

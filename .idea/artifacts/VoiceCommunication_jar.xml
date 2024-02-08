@@ -1,0 +1,9 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="VoiceCommunication:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/VoiceCommunication_jar</output-path>
+    <root id="archive" name="VoiceCommunication.jar">
+      <element id="module-output" name="VoiceCommunication" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/com/fazecast/jSerialComm/2.10.4/jSerialComm-2.10.4.jar" path-in-jar="/" />
+    </root>
+  </artifact>
+</component>

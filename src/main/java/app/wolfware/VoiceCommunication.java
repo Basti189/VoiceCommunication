@@ -10,7 +10,7 @@ public class VoiceCommunication {
 
     public final static Boolean DEBUG = false;
 
-    private final String VERSION = "1.0.0";
+    private final String VERSION = "1.0.1";
 
     private Device speaker;
 

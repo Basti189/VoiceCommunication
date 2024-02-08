@@ -107,10 +107,11 @@ public class MicrophoneClient implements Runnable, SerialPortDataListener {
             receivedData.append(new String(newData));
 
             if (receivedData.toString().equals("True")) {
-                setMute(false);
+                setMute(Settings.getInvertPushToTalk());
+
                 receivedData.setLength(0);
             } else if (receivedData.toString().equals("False")) {
-               setMute(true);
+                setMute(!Settings.getInvertPushToTalk());
                receivedData.setLength(0);
             }
         }
