@@ -2,6 +2,8 @@ package app.wolfware;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 
 public class Settings {
@@ -22,7 +24,24 @@ public class Settings {
 
     private static Boolean invertPushToTalk = false;
 
-    private static String comPort = "COM1";
+    // Halbduplex: Während man selbst sendet, wird der eigene Lautsprecher stummgeschaltet (gegen Echo/Rückkopplung)
+    private static Boolean halfDuplex = false;
+
+    // "auto" = ESP über USB-Hersteller-ID suchen, sonst fester Port wie "COM3"
+    private static String comPort = "auto";
+
+    // Erlaubte USB-Hersteller-IDs (hex, kommagetrennt): 10C4 = CP210x (NodeMCU), 1A86 = CH340,
+    // 303A = Espressif (natives USB des ESP32-S3). Leer = alle Ports prüfen
+    private static List<Integer> serialVendorIds = List.of(0x10C4, 0x1A86, 0x303A);
+
+    // Optionale Seriennummer des USB-Wandlers, um genau einen ESP festzulegen (CP210x hat eine eindeutige)
+    private static String serialNumber = "";
+
+    // Optionale Produkt-ID (hex), leer = beliebig
+    private static Integer serialProductId = -1;
+
+    // Mikrofon stumm schalten, wenn der ESP so lange nichts sendet (0 = aus, nur mit zyklisch sendender Firmware nutzen)
+    private static Integer pttTimeoutMs = 0;
 
     public static void init() {
         try {
@@ -31,21 +50,27 @@ public class Settings {
             Properties props = new Properties();
             props.load(isr);
 
-            speaker = props.getProperty("speaker");
-            microphone = props.getProperty("microphone");
-            loudness = Integer.parseInt(props.getProperty("loudness"));
-            port = Integer.parseInt(props.getProperty("port"));
-            ip = props.getProperty("ip");
-            pushToTalk = Boolean.parseBoolean(props.getProperty("pushToTalk"));
-            invertPushToTalk = Boolean.parseBoolean(props.getProperty("invertPushToTalk"));
-            comPort = props.getProperty("comPort");
+            // Mit Standardwerten lesen, damit fehlende Einträge nicht zum Absturz führen
+            speaker = props.getProperty("speaker", speaker);
+            microphone = props.getProperty("microphone", microphone);
+            loudness = Integer.parseInt(props.getProperty("loudness", String.valueOf(loudness)));
+            port = Integer.parseInt(props.getProperty("port", String.valueOf(port)));
+            ip = props.getProperty("ip", ip);
+            pushToTalk = Boolean.parseBoolean(props.getProperty("pushToTalk", String.valueOf(pushToTalk)));
+            invertPushToTalk = Boolean.parseBoolean(props.getProperty("invertPushToTalk", String.valueOf(invertPushToTalk)));
+            halfDuplex = Boolean.parseBoolean(props.getProperty("halfDuplex", String.valueOf(halfDuplex)));
+            comPort = props.getProperty("comPort", comPort);
+            serialVendorIds = parseHexList(props.getProperty("serialVendorId"), serialVendorIds);
+            serialNumber = props.getProperty("serialNumber", serialNumber).trim();
+            serialProductId = parseHex(props.getProperty("serialProductId"), serialProductId);
+            pttTimeoutMs = Integer.parseInt(props.getProperty("pttTimeoutMs", String.valueOf(pttTimeoutMs)));
 
             isr.close();
             fis.close();
         } catch (FileNotFoundException fnf) {
             System.out.println("No config");
-        } catch (IOException ioe) {
-
+        } catch (IOException | NumberFormatException e) {
+            System.out.println("Invalid config: " + e.getMessage());
         }
     }
 
@@ -59,7 +84,12 @@ public class Settings {
         props.setProperty("ip", ip);
         props.setProperty("pushToTalk", String.valueOf(pushToTalk));
         props.setProperty("invertPushToTalk", String.valueOf(invertPushToTalk));
+        props.setProperty("halfDuplex", String.valueOf(halfDuplex));
         props.setProperty("comPort", comPort);
+        props.setProperty("serialVendorId", String.join(",", serialVendorIds.stream().map(id -> String.format("%04X", id)).toList()));
+        props.setProperty("serialNumber", serialNumber);
+        props.setProperty("serialProductId", serialProductId < 0 ? "" : String.format("%04X", serialProductId));
+        props.setProperty("pttTimeoutMs", String.valueOf(pttTimeoutMs));
 
         Writer fstream = null;
         BufferedWriter out = null;
@@ -139,5 +169,57 @@ public class Settings {
 
     public static void setComPort(String comPort) {
         Settings.comPort = comPort;
+    }
+
+    public static Boolean getHalfDuplex() {
+        return halfDuplex;
+    }
+
+    public static void setHalfDuplex(Boolean halfDuplex) {
+        Settings.halfDuplex = halfDuplex;
+    }
+
+    public static List<Integer> getSerialVendorIds() {
+        return serialVendorIds;
+    }
+
+    public static String getSerialNumber() {
+        return serialNumber;
+    }
+
+    public static Integer getSerialProductId() {
+        return serialProductId;
+    }
+
+    public static Integer getPttTimeoutMs() {
+        return pttTimeoutMs;
+    }
+
+    private static List<Integer> parseHexList(String value, List<Integer> fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        List<Integer> result = new ArrayList<>();
+        for (String part : value.split(",")) {
+            int id = parseHex(part, -1);
+            if (id >= 0) {
+                result.add(id);
+            }
+        }
+        return result;
+    }
+
+    private static Integer parseHex(String value, Integer fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        value = value.trim();
+        if (value.isEmpty()) {
+            return -1;
+        }
+        if (value.toLowerCase().startsWith("0x")) {
+            value = value.substring(2);
+        }
+        return Integer.parseInt(value, 16);
     }
 }

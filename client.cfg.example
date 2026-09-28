@@ -1,0 +1,24 @@
+# Beispielkonfiguration – als client.cfg neben die JAR legen.
+# speaker/microphone leer lassen: Beim ersten Start wird über die Konsole ausgewählt und gespeichert.
+# "default" = Standardgerät des Systems (unter Linux die beste Wahl, Zuordnung im Lautstärkemixer).
+# "Aus"     = dieses Gerät nicht verwenden (z. B. Mikrofon auf dem Rechner mit nur Lautsprecher).
+speaker=
+microphone=
+loudness=80
+port=5000
+# IP oder Hostname des jeweils ANDEREN Rechners (Kabine ↔ Instruktorraum)
+ip=192.168.1.20
+pushToTalk=true
+invertPushToTalk=false
+# ESP für die Sprechtaste: "auto" sucht den Port, der "True"/"False" sendet,
+# sonst fester Port wie COM3 (Windows) bzw. /dev/ttyUSB0 (Linux)
+comPort=auto
+# Nur Ports mit diesen USB-Hersteller-IDs prüfen: 10C4 = CP210x (NodeMCU), 1A86 = CH340, 303A = ESP32-S3
+serialVendorId=10C4,1A86,303A
+serialProductId=
+# Optional: Seriennummer des USB-Wandlers, wenn mehrere ESPs am Rechner hängen (steht beim Start im Log)
+serialNumber=
+# Mikrofon stumm, wenn der ESP so lange nichts meldet (0 = aus). Nur mit der neuen Firmware nutzen!
+pttTimeoutMs=500
+# true = eigenen Lautsprecher stumm schalten, solange man selbst spricht (nur mit pushToTalk sinnvoll)
+halfDuplex=false

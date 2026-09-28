@@ -3,14 +3,29 @@ package app.wolfware.client;
 import app.wolfware.Audio;
 import app.wolfware.Device;
 import app.wolfware.Settings;
-import com.fazecast.jSerialComm.SerialPort;
-import com.fazecast.jSerialComm.SerialPortDataListener;
-import com.fazecast.jSerialComm.SerialPortEvent;
+import app.wolfware.TalkState;
+import app.wolfware.server.SpeakerClient;
 
-import java.io.OutputStream;
-import java.net.Socket;
+import app.wolfware.AudioInput;
 
-public class MicrophoneClient implements Runnable, SerialPortDataListener {
+import javax.sound.sampled.LineUnavailableException;
+import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetSocketAddress;
+import java.net.SocketException;
+import java.nio.ByteBuffer;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+public class MicrophoneClient implements Runnable, PushToTalkSerial.Listener {
+
+    // Aufnahmepuffer: 40 ms reichen, größer bedeutet nur mehr mögliche Verzögerung
+    private static final int INPUT_BUFFER_FRAMES = 4;
+
+    // So oft wird die Zieladresse neu aufgelöst (falls sich die IP hinter einem Hostnamen ändert)
+    private static final long RESOLVE_INTERVAL_SECONDS = 30;
 
     public final Device microphone;
 
@@ -18,9 +33,16 @@ public class MicrophoneClient implements Runnable, SerialPortDataListener {
 
     private volatile boolean isMute = true;
 
-    private SerialPort serialPort;
+    private volatile InetSocketAddress target;
 
-    private StringBuilder receivedData = new StringBuilder();
+    // Bis zu diesem Zeitpunkt wird der Aufnahmepegel angezeigt (Konsolenbefehl "mic")
+    private volatile long meterUntil = 0;
+
+    private PushToTalkSerial pushToTalk;
+
+    private int framePeak = 0;
+
+    private long lastMeterPrint = 0;
 
     public MicrophoneClient(Device microphone) {
         this.microphone = microphone;
@@ -28,51 +50,113 @@ public class MicrophoneClient implements Runnable, SerialPortDataListener {
 
     @Override
     public void run() {
-        Audio audio = new Audio();
-        audio.getInputLine(microphone.getIndex());
-        audio.startInputLine();
+        AudioInput line;
+        try {
+            line = new Audio().openInputLine(microphone.getIndex(), INPUT_BUFFER_FRAMES);
+        } catch (LineUnavailableException e) {
+            System.out.println("[MicrophoneClient] unable to open microphone: " + e.getMessage());
+            return;
+        }
+
         isMute = Settings.getPushToTalk();
-
+        TalkState.setTransmitting(!isMute);
         if (Settings.getPushToTalk()) {
-            System.out.println("[MicrophoneClient] try to open " + Settings.getComPort());
-            serialPort = SerialPort.getCommPort(Settings.getComPort());
-            serialPort.setBaudRate(115200);
-            if (serialPort.openPort()) {
-                serialPort.addDataListener(this);
-                System.out.println("[MicrophoneClient] Port is opened and ready to use");
-            } else {
-                System.out.println("[MicrophoneClient] Unable to open " + Settings.getComPort() + ". PushToTalk only available over console!");
-                serialPort = null;
-            }
+            pushToTalk = new PushToTalkSerial(this);
+            pushToTalk.start();
         }
 
-        while (!stop) {
-            Socket socket = null;
-            try {
-                Thread.sleep(1000);
-                System.out.println("[MicrophoneClient] connecting to " + Settings.getIp() + ":" + Settings.getPort());
-                socket = new Socket(Settings.getIp(), Settings.getPort());
-                System.out.println("[MicrophoneClient] Connected!");
-                Thread.sleep(1000);
-                OutputStream out = socket.getOutputStream();
+        // Adresse im Hintergrund auflösen, damit ein langsamer DNS-Server nie die Aufnahme blockiert
+        resolveTarget();
+        ScheduledExecutorService resolver = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "target-resolver");
+            thread.setDaemon(true);
+            return thread;
+        });
+        resolver.scheduleWithFixedDelay(this::resolveTarget, RESOLVE_INTERVAL_SECONDS, RESOLVE_INTERVAL_SECONDS, TimeUnit.SECONDS);
 
-                while (!stop) {
-                    if (!isMute) {
-                        byte[] buffer = new byte[1024];
-                        audio.getTargetLine().read(buffer, 0, buffer.length);
-                        out.write(buffer, 0, buffer.length);
-                    }
+        try (DatagramSocket socket = new DatagramSocket()) {
+            byte[] packet = new byte[SpeakerClient.PACKET_BYTES];
+            ByteBuffer header = ByteBuffer.wrap(packet);
+            DatagramPacket datagram = new DatagramPacket(packet, packet.length);
+            int sequence = 0;
+
+            while (!stop) {
+                // Immer lesen – auch stummgeschaltet –, damit sich im Mikrofonpuffer keine alten Daten stauen.
+                // read() blockiert, bis 10 ms Audio da sind – kein Busy-Waiting.
+                int read = line.read(packet, SpeakerClient.HEADER_BYTES, Audio.FRAME_BYTES);
+                if (read != Audio.FRAME_BYTES) {
+                    continue;
                 }
-
-            } catch (Exception ignore) {
-                //System.out.println("[MicrophoneClient] Reconnecting...");
-                //throw new RuntimeException(e);
+                showLevel(packet);
+                if (isMute) {
+                    continue;
+                }
+                InetSocketAddress currentTarget = target;
+                if (currentTarget == null || currentTarget.isUnresolved()) {
+                    continue;
+                }
+                header.putInt(0, sequence++);
+                datagram.setSocketAddress(currentTarget);
+                try {
+                    socket.send(datagram);
+                } catch (IOException ignore) {
+                    // Netzwerk kurz weg – beim nächsten Paket erneut versuchen
+                }
             }
+        } catch (SocketException e) {
+            System.out.println("[MicrophoneClient] socket error: " + e.getMessage());
+        } finally {
+            resolver.shutdownNow();
+            TalkState.setTransmitting(false);
+            line.close();
+            if (pushToTalk != null) {
+                pushToTalk.stop();
+            }
+            System.out.println("[MicrophoneClient] shutdown");
         }
-        if (serialPort != null) {
-            serialPort.closePort();
+    }
+
+    /**
+     * Startet die Pegelanzeige für ein paar Sekunden. Gemessen wird genau das Signal,
+     * das auch gesendet wird – ohne dafür eine zweite Leitung zu öffnen.
+     */
+    public void showLevelFor(long millis) {
+        meterUntil = System.currentTimeMillis() + millis;
+        System.out.println("[MicrophoneClient] Pegel des Mikrofons (0-100 %):");
+    }
+
+    private void showLevel(byte[] packet) {
+        long now = System.currentTimeMillis();
+        if (now > meterUntil) {
+            return;
         }
-        System.out.println("[MicrophoneClient] shutdown");
+        int peak = 0;
+        for (int i = SpeakerClient.HEADER_BYTES; i + 1 < packet.length; i += 2) {
+            peak = Math.max(peak, Math.abs((short) ((packet[i] & 0xFF) | (packet[i + 1] << 8))));
+        }
+        framePeak = Math.max(framePeak, peak);
+        if (now - lastMeterPrint < 200) {
+            return;
+        }
+        lastMeterPrint = now;
+        int percent = framePeak * 100 / 32768;
+        int width = percent * 40 / 100;
+        String warning = percent > 97 ? "  UEBERSTEUERT" : percent < 2 ? "  (kein Signal)" : "";
+        System.out.println("[" + "#".repeat(width) + " ".repeat(40 - width) + "] " + percent + " %"
+                + (isMute ? "  (stumm, wird nicht gesendet)" : "") + warning);
+        framePeak = 0;
+    }
+
+    private void resolveTarget() {
+        InetSocketAddress resolved = new InetSocketAddress(Settings.getIp(), Settings.getPort());
+        if (resolved.isUnresolved()) {
+            System.out.println("[MicrophoneClient] unable to resolve " + Settings.getIp() + ", keeping previous address");
+            return;
+        }
+        if (!resolved.equals(target)) {
+            System.out.println("[MicrophoneClient] sending to " + resolved + " (UDP)");
+        }
+        target = resolved;
     }
 
     public void stop() {
@@ -80,12 +164,16 @@ public class MicrophoneClient implements Runnable, SerialPortDataListener {
     }
 
     public void setMute(boolean isMute) {
+        if (this.isMute == isMute) {
+            return;
+        }
         if (isMute) {
             System.out.println("[MicrophoneClient] microphone muted");
         } else {
             System.out.println("[MicrophoneClient] you can speak now");
         }
         this.isMute = isMute;
+        TalkState.setTransmitting(!isMute);
     }
 
     public void toggleMute() {
@@ -93,27 +181,16 @@ public class MicrophoneClient implements Runnable, SerialPortDataListener {
     }
 
     @Override
-    public int getListeningEvents() {
-        return SerialPort.LISTENING_EVENT_DATA_AVAILABLE;
+    public void onPushToTalk(boolean pressed) {
+        setMute(!pressed);
     }
 
     @Override
-    public void serialEvent(SerialPortEvent serialPortEvent) {
-        // Receive Data from ESP (Arduino) for push to talk
-        if (serialPortEvent.getEventType() == SerialPort.LISTENING_EVENT_DATA_AVAILABLE) {
-            byte[] newData = new byte[serialPort.bytesAvailable()];
-            int numRead = serialPort.readBytes(newData, newData.length);
-
-            receivedData.append(new String(newData));
-
-            if (receivedData.toString().equals("True")) {
-                setMute(Settings.getInvertPushToTalk());
-
-                receivedData.setLength(0);
-            } else if (receivedData.toString().equals("False")) {
-                setMute(!Settings.getInvertPushToTalk());
-               receivedData.setLength(0);
-            }
+    public void onPushToTalkLost(String reason) {
+        // Sicherer Zustand: Mikrofon aus, unabhängig von invertPushToTalk
+        if (!isMute) {
+            System.out.println("[MicrophoneClient] " + reason);
         }
+        setMute(true);
     }
 }
