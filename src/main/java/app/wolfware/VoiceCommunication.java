@@ -12,7 +12,7 @@ public class VoiceCommunication {
 
     public final static Boolean DEBUG = false;
 
-    private final String VERSION = "2.8.0";
+    private final String VERSION = "2.9.0";
 
     // Ein einziger Scanner für die ganze Laufzeit
     private final Scanner scanner = new Scanner(System.in);

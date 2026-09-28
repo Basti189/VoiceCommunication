@@ -62,6 +62,10 @@ PlatformIO-Projekt in `firmware/ptt`, Standard ist die NodeMCU 1.0 (ESP8266):
 
 Taster zwischen **D5 (GPIO 14)** und GND. Die blaue LED am ESP-Modul leuchtet, solange gesprochen wird.
 
+Beim ESP32-S3 setzt die Software beim Verbinden DTR, weil der Arduino-Core über das native USB
+erst sendet, wenn ein Host zuhört. Bei CP210x und CH340 bleibt DTR unangetastet, damit die
+Auto-Reset-Schaltung der NodeMCU nicht ausgelöst wird.
+
 Alternativ ESP32-S3-DevKitC-1 N16R8 (`-e esp32-s3-devkitc-1`): Taster an GPIO 4, Buchse „USB“ verwenden.
 
 ## Echo / Rückkopplung

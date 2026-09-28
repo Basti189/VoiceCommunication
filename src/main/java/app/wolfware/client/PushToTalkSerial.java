@@ -43,6 +43,9 @@ public class PushToTalkSerial implements SerialPortDataListener {
     // Großzügig, weil der ESP8266 beim Öffnen des Ports neu startet.
     private static final long PROBE_TIMEOUT_MS = 3000;
 
+    // Espressif: natives USB des ESP32-S3 (CDC), keine Auto-Reset-Schaltung dahinter
+    private static final int VENDOR_ESPRESSIF = 0x303A;
+
     private final Listener listener;
 
     private final StringBuilder receivedData = new StringBuilder();
@@ -149,6 +152,13 @@ public class PushToTalkSerial implements SerialPortDataListener {
             }
             return;
         }
+        // Beim nativen USB des ESP32-S3 sendet der Arduino-Core erst, wenn der Host DTR setzt –
+        // ohne das bleibt der Port stumm. Bei USB-Seriell-Wandlern (CP210x, CH340) wird DTR
+        // bewusst nicht angefasst, weil deren Auto-Reset-Schaltung daran haengt.
+        if (port.getVendorID() == VENDOR_ESPRESSIF) {
+            port.setDTR();
+        }
+
         receivedData.setLength(0);
         pressed = false;
         connectedAt = System.currentTimeMillis();

@@ -37,6 +37,10 @@ void setup() {
     pinMode(LED_BUILTIN, OUTPUT);
 #endif
     Serial.begin(115200);
+#if defined(ARDUINO_USB_CDC_ON_BOOT)
+    // Natives USB: nicht blockieren, wenn gerade kein Host zuhoert
+    Serial.setTxTimeoutMs(0);
+#endif
     // Leerzeile trennt die Meldungen vom Boot-Text des ESP8266
     Serial.println();
 
